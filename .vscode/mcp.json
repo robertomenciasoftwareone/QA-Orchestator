@@ -1,0 +1,21 @@
+{
+  "servers": {
+    "qa-orchestrator": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/src/index.js"],
+      "env": {
+        "JIRA_BASE_URL": "https://TU-ORG.atlassian.net",
+        "JIRA_EMAIL": "tu-email@company.com",
+        "JIRA_API_TOKEN": "TU_JIRA_API_TOKEN",
+        "CONFLUENCE_BASE_URL": "https://TU-ORG.atlassian.net",
+        "CONFLUENCE_EMAIL": "tu-email@company.com",
+        "CONFLUENCE_API_TOKEN": "TU_JIRA_API_TOKEN",
+        "FIGMA_TOKEN": "TU_FIGMA_TOKEN",
+        "ZEPHYR_API_TOKEN": "TU_ZEPHYR_SCALE_API_TOKEN",
+        "ZEPHYR_ACCOUNT_ID": "TU_ATLASSIAN_ACCOUNT_ID",
+        "JIRA_PROJECT_KEY": "TU_PROJECT_KEY"
+      }
+    }
+  }
+}
