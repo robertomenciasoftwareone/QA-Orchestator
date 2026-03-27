@@ -1,11 +1,18 @@
 /**
  * TCGenerator
  * Generates structured test cases (MF/AF/EX) from Jira story + Confluence + Figma data.
- * This is the "brain" of qa-orchestrator-mcp.
+ *
+ * Rules (aligned with the reusable prompt):
+ * - Steps in SPANISH, Gherkin format: Dado / Cuando / Y / Entonces
+ * - First step always "Dado que..." (precondition/initial state)
+ * - Middle steps: "Cuando..." (user action) or "Y..." (chained)
+ * - Last/verification steps: "Entonces..." (observable result)
+ * - testData: concrete values where applicable
+ * - expectedResult: verifiable by a QA tester without ambiguity
+ * - Minimum 6 steps per TC
  */
 export class TCGenerator {
   /**
-   * Generate all test cases from aggregated source data.
    * @param {object} story - Jira issue object
    * @param {object|null} confluencePage - Confluence page object
    * @param {object|null} figmaData - Figma components/screens
@@ -15,17 +22,14 @@ export class TCGenerator {
     const context = this._buildContext(story, confluencePage, figmaData);
     const testCases = [];
 
-    // ── Main Flows (MF) ────────────────────────────────────────────────────────
     testCases.push(...this._generateMainFlows(context));
-
-    // ── Alternative Flows (AF) ─────────────────────────────────────────────────
     testCases.push(...this._generateAlternativeFlows(context));
-
-    // ── Exception Flows (EX) ──────────────────────────────────────────────────
     testCases.push(...this._generateExceptionFlows(context));
 
     return testCases;
   }
+
+  // ── Context builder ──────────────────────────────────────────────────────────
 
   _buildContext(story, confluencePage, figmaData) {
     const fields = story.fields || {};
@@ -34,10 +38,9 @@ export class TCGenerator {
     const acceptanceCriteria = this._extractAcceptanceCriteria(fields);
     const confluenceText = confluencePage?.text || "";
     const screens = figmaData?.screens || [];
-    const components = figmaData?.components || [];
 
-    // Parse acceptance criteria into individual criteria items
     const acItems = this._parseAcceptanceCriteria(acceptanceCriteria + "\n" + confluenceText);
+    const businessRules = this._parseBusinessRules(confluenceText);
 
     return {
       storyKey: story.key,
@@ -45,225 +48,272 @@ export class TCGenerator {
       description,
       acceptanceCriteria,
       acItems,
+      businessRules,
       confluenceText,
       screens,
-      components,
       issuetype: fields.issuetype?.name || "Story",
     };
   }
 
+  // ── MF — Flujo Principal ─────────────────────────────────────────────────────
+
   _generateMainFlows(ctx) {
     const tcs = [];
 
-    // TC1: Happy path - main functionality
+    // TC1: Happy path
     tcs.push({
       flowType: "MF",
       name: `Verificar el flujo principal de "${ctx.summary}"`,
-      objective: `Validar que el usuario puede completar exitosamente la funcionalidad principal: ${ctx.summary}`,
+      objective: `Validar que el usuario puede completar exitosamente el flujo principal: ${ctx.summary}`,
       precondition: this._buildPrecondition(ctx),
       steps: this._buildMainFlowSteps(ctx),
-      gherkin: this._buildGherkin("MF", ctx),
     });
 
-    // TC per acceptance criteria (main/positive ones)
+    // One TC per positive AC
     const positiveAC = ctx.acItems.filter((a) => a.type === "positive");
     for (const ac of positiveAC) {
       tcs.push({
         flowType: "MF",
         name: `Verificar: ${ac.title}`,
-        objective: `Validar criterio de aceptación: ${ac.title}`,
+        objective: `Validar el criterio de aceptación: ${ac.title}`,
         precondition: this._buildPrecondition(ctx),
-        steps: this._buildACSteps(ac, ctx),
-        gherkin: this._buildGherkin("MF", ctx, ac),
+        steps: this._buildACSteps(ac, ctx, "MF"),
       });
     }
 
-    // Screens from Figma → one TC per main screen/flow
-    const mainScreens = ctx.screens.slice(0, 3); // First 3 screens = main flows
-    for (const screen of mainScreens) {
+    // One TC per Figma screen (first 3)
+    for (const screen of ctx.screens.slice(0, 3)) {
       tcs.push({
         flowType: "MF",
-        name: `Verificar pantalla/componente: ${screen.name}`,
+        name: `Verificar pantalla: ${screen.name}`,
         objective: `Validar que la pantalla "${screen.name}" se muestra y funciona correctamente`,
         precondition: this._buildPrecondition(ctx),
         steps: this._buildScreenSteps(screen, ctx),
-        gherkin: "",
       });
     }
 
     return tcs;
   }
 
+  // ── AF — Flujo Alternativo ────────────────────────────────────────────────────
+
   _generateAlternativeFlows(ctx) {
     const tcs = [];
 
-    // TC: Navigation alternatives
+    // Cancel flow
     tcs.push({
       flowType: "AF",
-      name: `Verificar flujo alternativo - Cancelar operación en "${ctx.summary}"`,
-      objective: `Validar que el usuario puede cancelar la operación y el sistema regresa al estado anterior`,
+      name: `Verificar cancelación del flujo en "${ctx.summary}"`,
+      objective: `Validar que el usuario puede cancelar la operación y el sistema regresa al estado anterior sin guardar cambios`,
       precondition: this._buildPrecondition(ctx),
       steps: [
-        { description: "Navegar a la funcionalidad principal", test_data: "", expected_result: "La pantalla principal se muestra correctamente" },
-        { description: "Iniciar el flujo principal de la historia", test_data: "", expected_result: "El flujo se inicia correctamente" },
-        { description: "En mitad del flujo, seleccionar la opción 'Cancelar' o navegar hacia atrás", test_data: "", expected_result: "Se muestra confirmación de cancelación si aplica" },
-        { description: "Confirmar la cancelación", test_data: "", expected_result: "El sistema vuelve al estado anterior sin guardar cambios" },
-        { description: "Verificar que no se han guardado datos parciales", test_data: "", expected_result: "Los datos no persisten y el sistema está en estado limpio" },
+        { description: `Dado que el usuario está autenticado y navega a la sección "${ctx.summary}"`, test_data: "Usuario con permisos: usuario_test@empresa.com", expected_result: "La pantalla principal de la funcionalidad se muestra correctamente" },
+        { description: `Cuando el usuario inicia el flujo principal`, test_data: "", expected_result: "El formulario o pantalla de acción se activa correctamente" },
+        { description: `Y el usuario completa parcialmente los campos del formulario`, test_data: "Datos parciales: solo los primeros campos obligatorios", expected_result: "Los campos rellenados muestran los valores introducidos" },
+        { description: `Cuando el usuario selecciona la opción 'Cancelar' o navega hacia atrás`, test_data: "", expected_result: "El sistema solicita confirmación de cancelación si aplica, o cancela directamente" },
+        { description: `Y el usuario confirma la cancelación`, test_data: "", expected_result: "El sistema vuelve al estado anterior sin guardar los datos parciales" },
+        { description: `Entonces el usuario verifica que no se han guardado cambios`, test_data: "", expected_result: "Los datos introducidos no persisten; el sistema muestra el estado limpio anterior a la acción" },
       ],
-      gherkin: "",
     });
 
-    // TC: Optional fields / partial data
+    // Minimum data flow
     tcs.push({
       flowType: "AF",
-      name: `Verificar comportamiento con datos mínimos en "${ctx.summary}"`,
-      objective: `Validar que la funcionalidad opera correctamente con solo los campos obligatorios`,
+      name: `Verificar flujo con datos mínimos obligatorios en "${ctx.summary}"`,
+      objective: `Validar que la funcionalidad opera correctamente completando únicamente los campos obligatorios`,
       precondition: this._buildPrecondition(ctx),
       steps: [
-        { description: "Navegar a la funcionalidad", test_data: "", expected_result: "Se muestra el formulario/pantalla correctamente" },
-        { description: "Rellenar únicamente los campos obligatorios", test_data: "Campos mínimos requeridos", expected_result: "Los campos obligatorios se validan en tiempo real si aplica" },
-        { description: "Dejar campos opcionales vacíos", test_data: "", expected_result: "Los campos opcionales no bloquean el flujo" },
-        { description: "Completar la acción principal (guardar/enviar/confirmar)", test_data: "", expected_result: "La acción se completa con éxito con datos mínimos" },
-        { description: "Verificar resultado con campos mínimos", test_data: "", expected_result: "El registro/resultado se crea correctamente con los datos mínimos" },
+        { description: `Dado que el usuario está autenticado y accede a "${ctx.summary}"`, test_data: "Usuario con permisos: usuario_test@empresa.com", expected_result: "La pantalla se carga y muestra todos los campos disponibles" },
+        { description: `Cuando el usuario rellena únicamente los campos obligatorios`, test_data: "Valores mínimos requeridos según especificación", expected_result: "Los campos obligatorios se completan sin errores de validación en tiempo real" },
+        { description: `Y el usuario deja todos los campos opcionales vacíos`, test_data: "", expected_result: "Los campos opcionales permanecen vacíos sin bloquear la acción principal" },
+        { description: `Cuando el usuario ejecuta la acción principal (guardar/enviar/confirmar)`, test_data: "", expected_result: "El sistema acepta el formulario con datos mínimos y procesa la solicitud" },
+        { description: `Entonces el sistema muestra confirmación de éxito`, test_data: "", expected_result: "Se muestra mensaje de confirmación o redirección al resultado esperado" },
+        { description: `Y el usuario verifica que el registro se ha creado con los datos mínimos introducidos`, test_data: "", expected_result: "El registro existe en el sistema con los campos obligatorios correctamente almacenados y los opcionales vacíos o con valor por defecto" },
       ],
-      gherkin: "",
     });
 
-    // AC-based alternative flows
+    // Conditional AC flows
     const conditionalAC = ctx.acItems.filter((a) => a.type === "conditional");
     for (const ac of conditionalAC) {
       tcs.push({
         flowType: "AF",
         name: `Verificar flujo alternativo: ${ac.title}`,
-        objective: `Validar el comportamiento alternativo: ${ac.title}`,
+        objective: `Validar el comportamiento alternativo definido en el criterio: ${ac.title}`,
         precondition: this._buildPrecondition(ctx),
-        steps: this._buildACSteps(ac, ctx),
-        gherkin: "",
+        steps: this._buildACSteps(ac, ctx, "AF"),
       });
     }
 
-    // TC: Multiple user roles (if detected in description)
+    // Multi-role flow (if applicable)
     if (this._detectsMultipleRoles(ctx)) {
       tcs.push({
         flowType: "AF",
-        name: `Verificar acceso con diferentes roles de usuario en "${ctx.summary}"`,
-        objective: `Validar que distintos roles tienen el acceso correcto a la funcionalidad`,
-        precondition: "El sistema tiene configurados usuarios con distintos roles",
+        name: `Verificar acceso según rol de usuario en "${ctx.summary}"`,
+        objective: `Validar que cada rol de usuario tiene el acceso y permisos correctos sobre la funcionalidad`,
+        precondition: "El sistema tiene configurados usuarios con distintos roles activos",
         steps: [
-          { description: "Acceder con usuario de rol básico/limitado", test_data: "Usuario: rol_basico@test.com", expected_result: "El usuario ve únicamente las opciones permitidas para su rol" },
-          { description: "Intentar acceder a funciones restringidas", test_data: "", expected_result: "El sistema muestra mensaje de acceso denegado o no muestra la opción" },
-          { description: "Cerrar sesión y acceder con usuario administrador", test_data: "Usuario: admin@test.com", expected_result: "El administrador tiene acceso completo a todas las funciones" },
-          { description: "Verificar todas las funciones disponibles para el administrador", test_data: "", expected_result: "Todas las opciones del admin están habilitadas y funcionan correctamente" },
+          { description: `Dado que el usuario con rol básico accede a "${ctx.summary}"`, test_data: "Usuario: rol_basico@empresa.com / contraseña de test", expected_result: "El usuario accede pero solo ve las opciones permitidas para su rol" },
+          { description: `Cuando el usuario básico intenta acceder a funciones restringidas`, test_data: "Intentar acceder a: [función restringida]", expected_result: "El sistema muestra mensaje de acceso denegado o no presenta la opción en la interfaz" },
+          { description: `Y el usuario básico completa las acciones permitidas para su rol`, test_data: "", expected_result: "Las acciones permitidas se completan correctamente sin errores" },
+          { description: `Cuando el usuario con rol administrador accede a la misma funcionalidad`, test_data: "Usuario: admin@empresa.com / contraseña de test", expected_result: "El administrador visualiza todas las opciones disponibles sin restricciones" },
+          { description: `Y el administrador ejecuta una acción restringida para el rol básico`, test_data: "", expected_result: "La acción se ejecuta correctamente para el rol administrador" },
+          { description: `Entonces el sistema aplica los permisos según el rol en cada caso`, test_data: "", expected_result: "Cada rol ve y puede ejecutar únicamente las acciones definidas en la matriz de permisos" },
         ],
-        gherkin: "",
       });
     }
 
     return tcs;
   }
 
+  // ── EX — Flujo de Excepción ───────────────────────────────────────────────────
+
   _generateExceptionFlows(ctx) {
     const tcs = [];
 
-    // TC: Required field validation
+    // Required field validation
     tcs.push({
       flowType: "EX",
       name: `Verificar validación de campos obligatorios en "${ctx.summary}"`,
-      objective: `Validar que el sistema muestra errores cuando campos obligatorios están vacíos`,
+      objective: `Validar que el sistema impide continuar y muestra mensajes de error cuando los campos obligatorios están vacíos`,
       precondition: this._buildPrecondition(ctx),
       steps: [
-        { description: "Navegar a la funcionalidad", test_data: "", expected_result: "La pantalla se carga correctamente" },
-        { description: "Dejar todos los campos obligatorios vacíos", test_data: "", expected_result: "Los campos están vacíos" },
-        { description: "Intentar completar la acción principal sin rellenar campos", test_data: "", expected_result: "El sistema NO permite continuar" },
-        { description: "Verificar mensajes de error en los campos obligatorios", test_data: "", expected_result: "Se muestran mensajes de error descriptivos junto a cada campo obligatorio" },
-        { description: "Verificar que el foco se sitúa en el primer campo con error", test_data: "", expected_result: "El cursor se posiciona en el primer campo incorrecto" },
+        { description: `Dado que el usuario está autenticado y accede a "${ctx.summary}"`, test_data: "Usuario con permisos: usuario_test@empresa.com", expected_result: "La pantalla con el formulario se carga correctamente" },
+        { description: `Cuando el usuario deja todos los campos obligatorios vacíos`, test_data: "Todos los campos obligatorios sin rellenar", expected_result: "Los campos están vacíos y no muestran error hasta intentar enviar" },
+        { description: `Y el usuario intenta ejecutar la acción principal sin rellenar los campos`, test_data: "", expected_result: "El sistema bloquea la acción y no procesa la solicitud" },
+        { description: `Entonces el sistema muestra mensajes de error descriptivos junto a cada campo obligatorio vacío`, test_data: "", expected_result: "Cada campo obligatorio vacío muestra un mensaje de error claro indicando que es requerido" },
+        { description: `Y el foco del cursor se posiciona en el primer campo con error`, test_data: "", expected_result: "El cursor se sitúa automáticamente en el primer campo obligatorio sin rellenar" },
+        { description: `Cuando el usuario rellena los campos obligatorios con datos válidos y reenvía`, test_data: "Datos válidos según especificación", expected_result: "Los mensajes de error desaparecen y la acción se procesa correctamente" },
       ],
-      gherkin: "",
     });
 
-    // TC: Invalid data format
+    // Invalid data format
     tcs.push({
       flowType: "EX",
-      name: `Verificar comportamiento con datos inválidos en "${ctx.summary}"`,
-      objective: `Validar que el sistema rechaza datos con formato incorrecto y muestra mensajes de error apropiados`,
+      name: `Verificar comportamiento con datos con formato inválido en "${ctx.summary}"`,
+      objective: `Validar que el sistema rechaza datos con formato incorrecto y muestra mensajes de error apropiados sin procesar la solicitud`,
       precondition: this._buildPrecondition(ctx),
       steps: [
-        { description: "Navegar a la funcionalidad", test_data: "", expected_result: "La pantalla se carga correctamente" },
-        { description: "Introducir datos con formato inválido en los campos", test_data: "Datos incorrectos: texto en campos numéricos, emails sin @, fechas incorrectas", expected_result: "Se muestra error de formato en el campo correspondiente" },
-        { description: "Intentar guardar/enviar con datos inválidos", test_data: "", expected_result: "El sistema bloquea la acción y muestra errores de validación" },
-        { description: "Corregir los datos con valores válidos", test_data: "Datos correctos según especificación", expected_result: "Los errores de validación desaparecen al corregir los datos" },
-        { description: "Completar la acción con datos corregidos", test_data: "", expected_result: "La acción se completa exitosamente" },
+        { description: `Dado que el usuario está autenticado y accede al formulario de "${ctx.summary}"`, test_data: "Usuario: usuario_test@empresa.com", expected_result: "El formulario se muestra correctamente con todos sus campos" },
+        { description: `Cuando el usuario introduce datos con formato inválido en los campos`, test_data: "Ejemplos: texto en campo numérico, email sin '@', fecha en formato incorrecto (ej: 32/13/2024), caracteres especiales no permitidos", expected_result: "El sistema detecta el formato incorrecto en tiempo real o al enviar" },
+        { description: `Y el usuario intenta guardar o enviar el formulario con datos inválidos`, test_data: "", expected_result: "El sistema bloquea el envío y no procesa la solicitud" },
+        { description: `Entonces el sistema muestra mensajes de error de validación junto a cada campo con formato incorrecto`, test_data: "", expected_result: "Los mensajes indican el formato esperado (ej: 'Introduce un email válido', 'Solo se permiten números')" },
+        { description: `Cuando el usuario corrige los datos introduciendo valores con formato válido`, test_data: "Datos corregidos con formato correcto", expected_result: "Los mensajes de error de formato desaparecen al corregir cada campo" },
+        { description: `Entonces el usuario completa la acción principal con datos válidos y el sistema procesa correctamente`, test_data: "", expected_result: "La acción se completa con éxito y el sistema confirma el resultado esperado" },
       ],
-      gherkin: "",
     });
 
-    // TC: Connectivity / server error
+    // Server/service error
     tcs.push({
       flowType: "EX",
-      name: `Verificar manejo de errores del servidor en "${ctx.summary}"`,
-      objective: `Validar que el sistema maneja correctamente errores del servidor y muestra mensajes amigables`,
-      precondition: `${this._buildPrecondition(ctx)} El servidor está configurado para simular errores (entorno de prueba)`,
+      name: `Verificar manejo de error de servidor/servicio en "${ctx.summary}"`,
+      objective: `Validar que el sistema gestiona correctamente errores del servidor y muestra mensajes amigables sin exponer información técnica`,
+      precondition: `${this._buildPrecondition(ctx)} El entorno de test está configurado para simular errores de servidor (error 500 o timeout).`,
       steps: [
-        { description: "Navegar a la funcionalidad con conectividad inestable o servidor en error", test_data: "Simular timeout o error 500", expected_result: "La pantalla muestra estado de carga" },
-        { description: "Intentar completar la acción principal", test_data: "", expected_result: "El sistema detecta el error del servidor" },
-        { description: "Verificar mensaje de error mostrado al usuario", test_data: "", expected_result: "Se muestra un mensaje de error descriptivo y amigable (no técnico)" },
-        { description: "Verificar opción de reintento", test_data: "", expected_result: "El usuario puede reintentar la operación" },
-        { description: "Restaurar conectividad y reintentar", test_data: "", expected_result: "La operación se completa exitosamente al recuperar conectividad" },
+        { description: `Dado que el usuario está autenticado y ha completado el formulario de "${ctx.summary}" con datos válidos`, test_data: "Datos válidos completos; servidor configurado para devolver error 500 o timeout", expected_result: "El formulario muestra los datos correctos listos para enviar" },
+        { description: `Cuando el usuario ejecuta la acción principal y el servidor devuelve un error`, test_data: "Simular: error HTTP 500, timeout de red o servicio no disponible", expected_result: "El sistema detecta el error del servidor durante el procesamiento" },
+        { description: `Entonces el sistema muestra un mensaje de error amigable al usuario`, test_data: "", expected_result: "Se muestra un mensaje descriptivo (ej: 'Ha ocurrido un error. Por favor, inténtalo de nuevo.') sin exponer códigos técnicos ni stack traces" },
+        { description: `Y el sistema ofrece al usuario la opción de reintentar la operación`, test_data: "", expected_result: "Existe un botón o enlace de reintento visible y accesible" },
+        { description: `Cuando el servidor se recupera y el usuario reintenta la operación`, test_data: "Servidor restaurado al estado normal", expected_result: "La operación se procesa correctamente en el reintento" },
+        { description: `Entonces el sistema confirma el éxito de la operación y muestra el resultado esperado`, test_data: "", expected_result: "El resultado es el mismo que en el flujo principal sin errores; los datos se han guardado correctamente" },
       ],
-      gherkin: "",
     });
 
-    // TC: Duplicate data / business rules
+    // Duplicate / business rule violation
     tcs.push({
       flowType: "EX",
-      name: `Verificar manejo de duplicados/reglas de negocio en "${ctx.summary}"`,
-      objective: `Validar que el sistema previene datos duplicados y respeta las reglas de negocio`,
-      precondition: `${this._buildPrecondition(ctx)} Existe al menos un registro previo en el sistema`,
+      name: `Verificar manejo de duplicados y reglas de negocio en "${ctx.summary}"`,
+      objective: `Validar que el sistema detecta y previene la creación de registros duplicados y el incumplimiento de reglas de negocio`,
+      precondition: `${this._buildPrecondition(ctx)} Existe al menos un registro previo en el sistema con datos conocidos.`,
       steps: [
-        { description: "Intentar crear un registro con datos que ya existen en el sistema", test_data: "Datos de un registro existente", expected_result: "El sistema detecta la duplicidad" },
-        { description: "Verificar mensaje de error de duplicado", test_data: "", expected_result: "Se muestra un mensaje claro indicando que el registro ya existe" },
-        { description: "Verificar que no se ha creado el registro duplicado", test_data: "", expected_result: "La base de datos no contiene el duplicado" },
-        { description: "Modificar los datos para que sean únicos y reintentar", test_data: "Datos únicos y válidos", expected_result: "El registro se crea correctamente con datos únicos" },
+        { description: `Dado que existe un registro previo en el sistema con datos conocidos`, test_data: "Registro existente con identificador único conocido (ej: mismo nombre, código o email)", expected_result: "El registro previo existe y está activo en el sistema" },
+        { description: `Cuando el usuario intenta crear un nuevo registro con los mismos datos únicos`, test_data: "Datos idénticos al registro existente (mismo identificador único)", expected_result: "El sistema detecta la duplicidad antes o durante el procesamiento" },
+        { description: `Entonces el sistema rechaza la creación y muestra un mensaje de error de duplicado`, test_data: "", expected_result: "Se muestra un mensaje claro indicando que el registro ya existe (ej: 'Ya existe un registro con este nombre/código')" },
+        { description: `Y el sistema no crea el registro duplicado en la base de datos`, test_data: "", expected_result: "Verificado: solo existe un registro con ese identificador único en el sistema" },
+        { description: `Cuando el usuario modifica los datos duplicados por valores únicos y válidos`, test_data: "Nuevo identificador único diferente al existente", expected_result: "El sistema acepta los nuevos datos sin error de duplicado" },
+        { description: `Entonces el sistema crea el nuevo registro correctamente y confirma el resultado`, test_data: "", expected_result: "El nuevo registro se crea exitosamente y aparece en el sistema con los datos únicos introducidos" },
       ],
-      gherkin: "",
     });
 
-    // EX cases from negative AC
+    // Permissions / insufficient access
+    tcs.push({
+      flowType: "EX",
+      name: `Verificar control de acceso con permisos insuficientes en "${ctx.summary}"`,
+      objective: `Validar que el sistema impide el acceso a la funcionalidad a usuarios sin los permisos necesarios`,
+      precondition: "Existe un usuario sin permisos para acceder a la funcionalidad bajo prueba",
+      steps: [
+        { description: `Dado que el usuario sin permisos intenta acceder a "${ctx.summary}"`, test_data: "Usuario sin permisos: sin_permisos@empresa.com", expected_result: "El sistema evalúa los permisos del usuario" },
+        { description: `Cuando el sistema verifica que el usuario no tiene los permisos necesarios`, test_data: "", expected_result: "El acceso es denegado antes de cargar la funcionalidad" },
+        { description: `Entonces el sistema muestra un mensaje de acceso no autorizado`, test_data: "", expected_result: "Se muestra mensaje claro (ej: 'No tienes permisos para acceder a esta funcionalidad') o redirección a página de error 403" },
+        { description: `Y el sistema no expone datos ni funcionalidades de la pantalla restringida`, test_data: "", expected_result: "Ningún dato de la funcionalidad restringida es visible ni accesible para el usuario sin permisos" },
+        { description: `Cuando el usuario con permisos correctos accede a la misma funcionalidad`, test_data: "Usuario con permisos: usuario_test@empresa.com", expected_result: "El acceso se concede y la funcionalidad se muestra correctamente" },
+        { description: `Entonces el sistema permite el acceso completo según los permisos asignados al rol`, test_data: "", expected_result: "Todas las opciones y datos de la funcionalidad son accesibles para el usuario autorizado" },
+      ],
+    });
+
+    // Negative AC flows
     const negativeAC = ctx.acItems.filter((a) => a.type === "negative");
     for (const ac of negativeAC) {
       tcs.push({
         flowType: "EX",
         name: `Verificar excepción: ${ac.title}`,
-        objective: `Validar el comportamiento de excepción: ${ac.title}`,
+        objective: `Validar el comportamiento de excepción definido en el criterio: ${ac.title}`,
         precondition: this._buildPrecondition(ctx),
-        steps: this._buildACSteps(ac, ctx),
-        gherkin: "",
+        steps: this._buildACSteps(ac, ctx, "EX"),
       });
     }
 
     return tcs;
   }
 
-  // ─── Helper builders ──────────────────────────────────────────────────────────
+  // ── Step builders ─────────────────────────────────────────────────────────────
 
   _buildPrecondition(ctx) {
-    return `El usuario tiene acceso al sistema y está autenticado correctamente. La historia "${ctx.storyKey}: ${ctx.summary}" está disponible en el entorno de prueba.`;
+    return `El usuario tiene acceso al sistema y está autenticado correctamente. La funcionalidad "${ctx.storyKey}: ${ctx.summary}" está disponible y accesible en el entorno de prueba.`;
   }
 
   _buildMainFlowSteps(ctx) {
     const steps = [
-      { description: `Acceder al sistema con credenciales válidas`, test_data: "Usuario de prueba con permisos adecuados", expected_result: "El usuario accede al sistema correctamente" },
-      { description: `Navegar a la sección correspondiente a: ${ctx.summary}`, test_data: "", expected_result: "La sección se muestra correctamente y es accesible" },
-      { description: "Verificar que todos los elementos de la pantalla están presentes", test_data: "", expected_result: "Todos los campos, botones y elementos definidos en el diseño están visibles y activos" },
-      { description: "Completar el flujo principal con datos válidos", test_data: "Datos de prueba válidos", expected_result: "El sistema acepta los datos y procesa la solicitud" },
-      { description: "Confirmar la acción principal", test_data: "", expected_result: "El sistema muestra confirmación de éxito" },
-      { description: "Verificar que el resultado es el esperado", test_data: "", expected_result: "El resultado final coincide con los criterios de aceptación de la historia" },
+      {
+        description: `Dado que el usuario está autenticado en el sistema con credenciales válidas`,
+        test_data: "Usuario de prueba: usuario_test@empresa.com con permisos adecuados para la funcionalidad",
+        expected_result: "El usuario accede al sistema correctamente y visualiza la pantalla principal",
+      },
+      {
+        description: `Cuando el usuario navega a la sección "${ctx.summary}"`,
+        test_data: "",
+        expected_result: "La sección se muestra completamente con todos sus elementos: campos, botones y etiquetas visibles y activos",
+      },
+      {
+        description: `Y el usuario verifica que todos los elementos de la interfaz están presentes y accesibles`,
+        test_data: "",
+        expected_result: "Todos los elementos definidos en la especificación están presentes, son interactivos y no muestran errores",
+      },
+      {
+        description: `Cuando el usuario completa el flujo principal con datos válidos`,
+        test_data: "Datos de prueba válidos según especificación de la historia",
+        expected_result: "El sistema acepta todos los datos introducidos sin mostrar errores de validación",
+      },
+      {
+        description: `Y el usuario confirma o ejecuta la acción principal`,
+        test_data: "",
+        expected_result: "El sistema procesa la solicitud y muestra indicador de progreso si corresponde",
+      },
+      {
+        description: `Entonces el sistema confirma el éxito de la operación`,
+        test_data: "",
+        expected_result: "Se muestra mensaje de confirmación de éxito o redirección al resultado esperado",
+      },
+      {
+        description: `Y el resultado final cumple con todos los criterios de aceptación de la historia`,
+        test_data: "",
+        expected_result: "El resultado almacenado o mostrado coincide exactamente con lo definido en los criterios de aceptación",
+      },
     ];
 
-    // Add steps from acceptance criteria
+    // Add specific AC verification steps
     for (const ac of ctx.acItems.slice(0, 2)) {
       steps.push({
-        description: `Verificar criterio: ${ac.title}`,
+        description: `Y el usuario verifica el criterio: ${ac.title}`,
         test_data: ac.testData || "",
         expected_result: ac.expected || ac.title,
       });
@@ -272,32 +322,82 @@ export class TCGenerator {
     return steps;
   }
 
-  _buildACSteps(ac, ctx) {
+  _buildACSteps(ac, ctx, flowType) {
+    const isException = flowType === "EX";
     return [
-      { description: `Acceder a la funcionalidad: ${ctx.summary}`, test_data: "", expected_result: "La funcionalidad se muestra correctamente" },
-      { description: `Preparar las condiciones para: ${ac.title}`, test_data: ac.testData || "Datos definidos en AC", expected_result: "Las condiciones están preparadas" },
-      { description: `Ejecutar la acción descrita en el criterio: ${ac.condition || ac.title}`, test_data: ac.testData || "", expected_result: "La acción se ejecuta" },
-      { description: `Verificar el resultado esperado`, test_data: "", expected_result: ac.expected || "El sistema se comporta según el criterio de aceptación" },
+      {
+        description: `Dado que el usuario está autenticado y accede a "${ctx.summary}"`,
+        test_data: "Usuario con permisos: usuario_test@empresa.com",
+        expected_result: "La funcionalidad se muestra correctamente",
+      },
+      {
+        description: `Y el usuario verifica el contexto necesario para: ${ac.title}`,
+        test_data: ac.testData || "Datos de contexto según criterio de aceptación",
+        expected_result: "El contexto y las condiciones previas están correctamente establecidos",
+      },
+      {
+        description: `Cuando el usuario prepara las condiciones para: ${ac.title}`,
+        test_data: ac.testData || "Datos de entrada definidos en el criterio",
+        expected_result: "Las condiciones están preparadas y el sistema está listo para ejecutar el criterio",
+      },
+      {
+        description: `Y el usuario ejecuta la acción correspondiente al criterio: ${ac.condition || ac.title}`,
+        test_data: ac.testData || "",
+        expected_result: isException ? "El sistema detecta la condición de excepción o error" : "La acción se ejecuta sin errores",
+      },
+      {
+        description: isException
+          ? `Entonces el sistema muestra el comportamiento de error/excepción esperado`
+          : `Entonces el sistema muestra el resultado esperado para el criterio`,
+        test_data: "",
+        expected_result: ac.expected || (isException
+          ? "El sistema gestiona correctamente la excepción según la especificación"
+          : "El sistema se comporta según el criterio de aceptación definido"),
+      },
+      {
+        description: `Y el usuario confirma que el comportamiento cumple con la especificación del criterio`,
+        test_data: "",
+        expected_result: `El criterio "${ac.title}" queda verificado y cumplido según la especificación de la historia ${ctx.storyKey}`,
+      },
     ];
   }
 
-  _buildScreenSteps(screen, _ctx) {
+  _buildScreenSteps(screen, ctx) {
     return [
-      { description: `Navegar a la pantalla "${screen.name}"`, test_data: "", expected_result: `La pantalla "${screen.name}" se carga completamente` },
-      { description: "Verificar todos los elementos visuales de la pantalla", test_data: "", expected_result: "Todos los elementos del diseño Figma están presentes y correctamente posicionados" },
-      { description: "Verificar la responsividad de la pantalla", test_data: "Diferentes resoluciones de pantalla", expected_result: "La pantalla se adapta correctamente a distintas resoluciones" },
-      { description: "Verificar que todos los elementos interactivos responden", test_data: "", expected_result: "Botones, links y elementos interactivos responden al click/tap" },
-      { description: "Verificar la accesibilidad básica de la pantalla", test_data: "", expected_result: "Los elementos tienen etiquetas ARIA apropiadas y son navegables por teclado" },
+      {
+        description: `Dado que el usuario está autenticado y navega a la pantalla "${screen.name}"`,
+        test_data: "Usuario con permisos: usuario_test@empresa.com",
+        expected_result: `La pantalla "${screen.name}" se carga completamente sin errores`,
+      },
+      {
+        description: `Cuando el usuario verifica todos los elementos visuales de la pantalla`,
+        test_data: "Resolución estándar: 1920x1080",
+        expected_result: "Todos los elementos del diseño están presentes, correctamente posicionados y con el estilo esperado",
+      },
+      {
+        description: `Y el usuario verifica la responsividad en diferentes resoluciones`,
+        test_data: "Resoluciones a probar: 1920x1080 (desktop), 768x1024 (tablet), 375x812 (móvil)",
+        expected_result: "La pantalla se adapta correctamente a cada resolución sin pérdida de contenido ni superposición de elementos",
+      },
+      {
+        description: `Cuando el usuario interactúa con los elementos interactivos de la pantalla`,
+        test_data: "Botones, enlaces, campos de formulario y controles de la pantalla",
+        expected_result: "Todos los elementos interactivos responden correctamente al click/tap sin errores de consola",
+      },
+      {
+        description: `Y el usuario verifica la accesibilidad básica de la pantalla`,
+        test_data: "Herramienta: navegación por teclado (Tab) y lector de pantalla",
+        expected_result: "Los elementos tienen etiquetas ARIA apropiadas, el orden de tabulación es lógico y el contraste de color cumple WCAG AA",
+      },
+      {
+        description: `Entonces la pantalla cumple con los requisitos visuales y funcionales definidos en el diseño`,
+        test_data: "",
+        expected_result: `La pantalla "${screen.name}" está implementada correctamente según el diseño de referencia y todos los criterios de aceptación visuales están cumplidos`,
+      },
     ];
   }
 
-  _buildGherkin(flowType, ctx, ac) {
-    const flowLabel = { MF: "flujo principal", AF: "flujo alternativo", EX: "flujo de excepción" }[flowType];
-    const title = ac ? ac.title : ctx.summary;
-    return `Feature: ${ctx.summary}\n\n  Scenario: [${flowType}] Verificar ${flowLabel} - ${title}\n    Given el usuario está autenticado en el sistema\n    When navega a la funcionalidad "${ctx.summary}"\n    And completa el ${flowLabel} con datos válidos\n    Then el sistema procesa la solicitud correctamente\n    And muestra el resultado esperado`;
-  }
-
-  // ─── AC Parser ────────────────────────────────────────────────────────────────
+  // ── AC Parser ─────────────────────────────────────────────────────────────────
 
   _parseAcceptanceCriteria(text) {
     const items = [];
@@ -306,13 +406,13 @@ export class TCGenerator {
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
 
     for (const line of lines) {
-      const cleanLine = line.replace(/^[-*•·]\s*/, "").trim();
+      const cleanLine = line.replace(/^[-*•·\d+\.]\s*/, "").trim();
       if (!cleanLine || cleanLine.length < 5) continue;
 
       let type = "positive";
-      if (/no\s|debe\s+impedir|error|fallo|inválid|incorrecto|deneg|bloqu/i.test(cleanLine)) {
+      if (/\bno\b|debe\s+impedir|error|fallo|inválid|incorrecto|deneg|bloqu|rechaz|prohib/i.test(cleanLine)) {
         type = "negative";
-      } else if (/cuando|si\s|en\s+caso\s+de|opcionalmente|puede/i.test(cleanLine)) {
+      } else if (/cuando|si\s|en\s+caso\s+de|opcionalmente|puede|podría/i.test(cleanLine)) {
         type = "conditional";
       }
 
@@ -325,13 +425,22 @@ export class TCGenerator {
       });
     }
 
-    return items.slice(0, 10); // Max 10 AC items to avoid explosion of TCs
+    return items.slice(0, 10);
+  }
+
+  _parseBusinessRules(text) {
+    if (!text) return [];
+    const rules = [];
+    const matches = text.match(/RN[-_]?\d+[^\n]*/gi) || [];
+    for (const match of matches) {
+      rules.push(match.trim());
+    }
+    return rules.slice(0, 5);
   }
 
   _extractAcceptanceCriteria(fields) {
-    // Common custom field names for acceptance criteria
     const acFields = [
-      "customfield_10014", // Common AC field
+      "customfield_10014",
       "customfield_10000",
       "customfield_10500",
       "acceptance_criteria",
@@ -343,7 +452,6 @@ export class TCGenerator {
       }
     }
 
-    // Try to find in description
     const desc = this._extractText(fields.description);
     const acMatch = desc.match(/criterios?\s+de\s+aceptaci[oó]n[:\s]*([\s\S]+?)(?:\n\n|$)/i);
     return acMatch ? acMatch[1] : "";
@@ -353,7 +461,7 @@ export class TCGenerator {
     if (!node) return "";
     if (typeof node === "string") return node;
 
-    if (node.type === "doc" || node.type === "blockquote" || node.type === "paragraph" || node.type === "bulletList" || node.type === "orderedList") {
+    if (["doc", "blockquote", "paragraph", "bulletList", "orderedList"].includes(node.type)) {
       return (node.content || []).map((n) => this._extractText(n)).join("\n");
     }
     if (node.type === "text") return node.text || "";
