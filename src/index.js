@@ -474,67 +474,135 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function handleCreateTCsFromStory(args) {
   const log = [];
   const labels = ["TC_GENERATED_BY_IA", "POR_REVISAR", ...(args.extra_labels || [])];
+  const projectKey = CONFIG.zephyr.projectKey || args.issue_key.split("-")[0];
 
-  log.push(`📋 Fetching Jira story: ${args.issue_key}`);
+  // ── PASO 1: Recopilación de información ────────────────────────────────────
+  log.push(`📋 PASO 1 — Recopilando información`);
+  log.push(`   Story Jira: ${args.issue_key}`);
   const story = await jira.getIssue(args.issue_key);
+  log.push(`   ✅ Story: ${story.fields?.summary}`);
 
-  log.push(`🔗 Getting linked pages...`);
   const links = await jira.getLinkedPages(args.issue_key);
 
   let confluenceContent = null;
   if (links.confluence?.length) {
-    log.push(`📄 Fetching Confluence page: ${links.confluence[0].title}`);
+    log.push(`   📄 Confluence: ${links.confluence[0].title}`);
     confluenceContent = await confluence.getPage(links.confluence[0].id);
+    log.push(`   ✅ Confluence cargado (${confluenceContent.text?.length || 0} chars)`);
   }
 
   let figmaData = null;
   if (links.figma?.length) {
-    log.push(`🎨 Fetching Figma designs: ${links.figma[0].url}`);
+    log.push(`   🎨 Figma: ${links.figma[0].url}`);
     const figmaKey = extractFigmaKey(links.figma[0].url);
     figmaData = await figma.getComponents(figmaKey);
   }
 
-  log.push(`🧠 Generating test cases from story + documentation...`);
+  // ── PASO 2: Generación de TCs ──────────────────────────────────────────────
+  log.push(`\n🧠 PASO 2 — Generando casos de prueba`);
   const testCases = tcGenerator.generate(story, confluenceContent, figmaData);
+  const mfCount = testCases.filter((t) => t.flowType === "MF").length;
+  const afCount = testCases.filter((t) => t.flowType === "AF").length;
+  const exCount = testCases.filter((t) => t.flowType === "EX").length;
+  log.push(`   MF (Flujo Principal):  ${mfCount}`);
+  log.push(`   AF (Flujo Alternativo): ${afCount}`);
+  log.push(`   EX (Flujo Excepción):  ${exCount}`);
+  log.push(`   Total: ${testCases.length} TCs`);
 
-  log.push(`\n📊 Generated ${testCases.length} test cases:`);
-  log.push(`  - MF (Flujo Principal): ${testCases.filter((t) => t.flowType === "MF").length}`);
-  log.push(`  - AF (Flujo Alternativo): ${testCases.filter((t) => t.flowType === "AF").length}`);
-  log.push(`  - EX (Flujo Excepción): ${testCases.filter((t) => t.flowType === "EX").length}`);
+  // ── PASO 3: Carpeta en Zephyr ──────────────────────────────────────────────
+  log.push(`\n📁 PASO 3 — Carpeta Zephyr: "${args.folder}"`);
+  let folderId = null;
+  try {
+    const folderResult = await zephyr.getOrCreateFolder(projectKey, args.folder);
+    folderId = folderResult.id;
+    log.push(`   ✅ Carpeta lista (id: ${folderId})`);
+  } catch (err) {
+    log.push(`   ⚠️  No se pudo crear/encontrar carpeta: ${err.message}. Los TCs se crearán sin carpeta.`);
+  }
 
+  // ── PASO 4: Creación de TCs + pasos ───────────────────────────────────────
+  log.push(`\n⚙️  PASO 4 — Creando TCs en Zephyr Scale`);
   const created = [];
+  const failed = [];
+
   for (const tc of testCases) {
-    log.push(`\n⚙️  Creating [${tc.flowType}] ${tc.name}...`);
+    const tcName = `[${tc.flowType}] ${tc.name}`;
     try {
+      // 4a. Crear shell del TC (sin pasos)
       const result = await zephyr.createTestCase({
-        projectKey: CONFIG.zephyr.projectKey || args.issue_key.split("-")[0],
-        name: `[${tc.flowType}] ${tc.name}`,
-        folder: args.folder,
-        steps: tc.steps,
+        projectKey,
+        name: tcName,
+        folderId,
         labels,
         precondition: tc.precondition,
         objective: tc.objective,
         storyKey: args.issue_key,
       });
-      created.push({ ...tc, zephyrKey: result.key });
-      log.push(`  ✅ Created: ${result.key}`);
+      const key = result.key;
 
-      if (args.include_playwright) {
-        const script = playwright.generateScriptFromTC({ name: tc.name, steps: tc.steps }, story.fields?.environment || "");
-        log.push(`  🎭 Playwright script generated`);
-        created[created.length - 1].playwrightScript = script;
-      }
+      // 4b. Insertar pasos en llamada separada
+      await zephyr.insertSteps(key, tc.steps);
+
+      created.push({ key, name: tcName, flowType: tc.flowType, steps: tc.steps.length });
+      log.push(`   ✅ ${key} — ${tcName} (${tc.steps.length} pasos)`);
     } catch (err) {
-      log.push(`  ❌ Failed: ${err.message}`);
+      failed.push({ name: tcName, flowType: tc.flowType, error: err.message });
+      log.push(`   ❌ FAILED — ${tcName}: ${err.message}`);
     }
   }
 
-  log.push(`\n✨ Done! ${created.length}/${testCases.length} test cases created in Zephyr Scale.`);
-  log.push(`📁 Folder: ${args.folder}`);
-
-  if (created.length > 0) {
-    log.push(`\n🔑 Created keys: ${created.map((t) => t.zephyrKey).filter(Boolean).join(", ")}`);
+  // Reintentar fallidos una vez
+  if (failed.length > 0) {
+    log.push(`\n🔁 Reintentando ${failed.length} TCs fallidos...`);
+    const stillFailed = [];
+    for (const f of failed) {
+      const tc = testCases.find((t) => `[${t.flowType}] ${t.name}` === f.name);
+      if (!tc) continue;
+      try {
+        const result = await zephyr.createTestCase({
+          projectKey,
+          name: f.name,
+          folderId,
+          labels,
+          precondition: tc.precondition,
+          objective: tc.objective,
+          storyKey: args.issue_key,
+        });
+        await zephyr.insertSteps(result.key, tc.steps);
+        created.push({ key: result.key, name: f.name, flowType: tc.flowType, steps: tc.steps.length });
+        log.push(`   ✅ Reintento OK: ${result.key}`);
+      } catch (err2) {
+        stillFailed.push({ ...f, error: err2.message });
+        log.push(`   ❌ Sigue fallando: ${f.name}`);
+      }
+    }
+    failed.length = 0;
+    failed.push(...stillFailed);
   }
+
+  // ── PASO 5: Verificación y tabla de resultados ─────────────────────────────
+  log.push(`\n${"═".repeat(70)}`);
+  log.push(`✨ RESUMEN DE EJECUCIÓN — ${args.issue_key} → Carpeta: ${args.folder}`);
+  log.push(`${"═".repeat(70)}`);
+  log.push(`${"Clave".padEnd(16)} ${"Nombre TC".padEnd(50)} ${"Flujo".padEnd(6)} ${"Pasos".padEnd(6)} Estado`);
+  log.push(`${"─".repeat(70)}`);
+
+  for (const tc of created) {
+    const key = (tc.key || "").padEnd(16);
+    const name = tc.name.substring(0, 49).padEnd(50);
+    const flow = tc.flowType.padEnd(6);
+    const steps = String(tc.steps).padEnd(6);
+    log.push(`${key} ${name} ${flow} ${steps} ✅ OK`);
+  }
+  for (const tc of failed) {
+    const name = tc.name.substring(0, 49).padEnd(50);
+    const flow = tc.flowType.padEnd(6);
+    log.push(`${"ERROR".padEnd(16)} ${name} ${flow} ${"–".padEnd(6)} ❌ ${tc.error}`);
+  }
+
+  log.push(`${"─".repeat(70)}`);
+  log.push(`Total creados: ${created.length}/${testCases.length} | Labels: ${labels.join(", ")}`);
+  if (folderId) log.push(`Carpeta Zephyr: "${args.folder}" (id: ${folderId})`);
 
   return log.join("\n");
 }
