@@ -480,7 +480,11 @@ async function handleCreateTCsFromStory(args) {
   log.push(`📋 PASO 1 — Recopilando información`);
   log.push(`   Story Jira: ${args.issue_key}`);
   const story = await jira.getIssue(args.issue_key);
+  const storyLabels = (story.fields?.labels || []).join(", ") || "(sin labels)";
+  const subtasks = (story.fields?.subtasks || []).map((s) => s.key).join(", ") || "(sin subtareas)";
   log.push(`   ✅ Story: ${story.fields?.summary}`);
+  log.push(`   Labels Jira: ${storyLabels}`);
+  log.push(`   Subtareas: ${subtasks}`);
 
   const links = await jira.getLinkedPages(args.issue_key);
 
@@ -580,29 +584,49 @@ async function handleCreateTCsFromStory(args) {
     failed.push(...stillFailed);
   }
 
-  // ── PASO 5: Verificación y tabla de resultados ─────────────────────────────
-  log.push(`\n${"═".repeat(70)}`);
-  log.push(`✨ RESUMEN DE EJECUCIÓN — ${args.issue_key} → Carpeta: ${args.folder}`);
-  log.push(`${"═".repeat(70)}`);
-  log.push(`${"Clave".padEnd(16)} ${"Nombre TC".padEnd(50)} ${"Flujo".padEnd(6)} ${"Pasos".padEnd(6)} Estado`);
-  log.push(`${"─".repeat(70)}`);
+  // ── PASO 5: Verificación final ─────────────────────────────────────────────
+  log.push(`\n✅ PASO 5 — Verificación final`);
+
+  // 5a. Confirm folder
+  if (folderId) {
+    log.push(`   📁 Carpeta "${args.folder}" creada/encontrada correctamente (id: ${folderId})`);
+  } else {
+    log.push(`   ⚠️  TCs creados sin carpeta (no se pudo obtener el ID)`);
+  }
+
+  // 5b. Verify labels on a sample TC
+  if (created.length > 0) {
+    try {
+      const sample = await zephyr.getTestCase(created[0].key);
+      const savedLabels = sample.labels || [];
+      const labelsOk = labels.every((l) => savedLabels.includes(l));
+      log.push(`   🏷️  Labels verificados en ${created[0].key}: ${savedLabels.join(", ")} ${labelsOk ? "✅" : "⚠️ (algunos labels no se guardaron)"}`);
+    } catch {
+      log.push(`   🏷️  Labels enviados: ${labels.join(", ")} (no se pudo verificar)`);
+    }
+  }
+
+  // 5c. Confirm steps inserted
+  const withSteps = created.filter((t) => t.steps > 0);
+  log.push(`   📝 Pasos insertados: ${withSteps.length}/${created.length} TCs con pasos`);
+
+  // 5d. Summary table (Markdown)
+  log.push(`\n## Resumen de ejecución — ${args.issue_key} → Carpeta: \`${args.folder}\``);
+  log.push(`\n| Clave | Nombre del TC | Flujo | Nº Pasos | Estado |`);
+  log.push(`|-------|---------------|-------|----------|--------|`);
 
   for (const tc of created) {
-    const key = (tc.key || "").padEnd(16);
-    const name = tc.name.substring(0, 49).padEnd(50);
-    const flow = tc.flowType.padEnd(6);
-    const steps = String(tc.steps).padEnd(6);
-    log.push(`${key} ${name} ${flow} ${steps} ✅ OK`);
+    const name = tc.name.length > 55 ? tc.name.substring(0, 52) + "..." : tc.name;
+    log.push(`| ${tc.key} | ${name} | ${tc.flowType} | ${tc.steps} | ✅ OK |`);
   }
   for (const tc of failed) {
-    const name = tc.name.substring(0, 49).padEnd(50);
-    const flow = tc.flowType.padEnd(6);
-    log.push(`${"ERROR".padEnd(16)} ${name} ${flow} ${"–".padEnd(6)} ❌ ${tc.error}`);
+    const name = tc.name.length > 55 ? tc.name.substring(0, 52) + "..." : tc.name;
+    log.push(`| ERROR | ${name} | ${tc.flowType} | – | ❌ ${tc.error.substring(0, 40)} |`);
   }
 
-  log.push(`${"─".repeat(70)}`);
-  log.push(`Total creados: ${created.length}/${testCases.length} | Labels: ${labels.join(", ")}`);
-  if (folderId) log.push(`Carpeta Zephyr: "${args.folder}" (id: ${folderId})`);
+  log.push(`\n**Total:** ${created.length}/${testCases.length} TCs creados`);
+  log.push(`**Labels aplicados:** ${labels.join(", ")}`);
+  log.push(`**Claves asignadas:** ${created.map((t) => t.key).join(", ") || "–"}`);
 
   return log.join("\n");
 }

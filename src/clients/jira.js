@@ -13,7 +13,7 @@ export class JiraClient {
   async getIssue(issueKey) {
     const { data } = await this.http.get(`/issue/${issueKey}`, {
       params: {
-        fields: "summary,description,status,assignee,priority,labels,issuetype,acceptance_criteria,customfield_10014,customfield_10000,comment,attachment,remotelinks",
+        fields: "summary,description,status,assignee,priority,labels,issuetype,subtasks,acceptance_criteria,customfield_10014,customfield_10000,customfield_10500,comment,attachment,remotelinks",
         expand: "renderedFields,names",
       },
     });
