@@ -83,6 +83,7 @@ export class ZephyrClient {
           testData: s.test_data || s.testData || "",
           expectedResult: s.expected_result || s.expectedResult || "",
         },
+        testCase: null,
       })),
     };
     const { data } = await this.http.post(`/testcases/${testCaseKey}/teststeps`, payload);
