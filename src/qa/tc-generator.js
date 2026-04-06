@@ -55,15 +55,29 @@ export class TCGenerator {
     };
   }
 
+  // ── Name helper ──────────────────────────────────────────────────────────────
+
+  /**
+   * Strips technical prefixes ("RF-001.1: ", "ESCPIC-12: ") from the summary
+   * and returns a clean, human-readable descriptor for use in TC names.
+   */
+  _deriveName(ctx) {
+    return ctx.summary
+      .replace(/^[A-Z]+-\d+(\.\d+)?[:\s]+/i, "")
+      .replace(/^RF-\d+(\.\d+)?[:\s]+/i, "")
+      .trim();
+  }
+
   // ── MF — Flujo Principal ─────────────────────────────────────────────────────
 
   _generateMainFlows(ctx) {
     const tcs = [];
+    const name = this._deriveName(ctx);
 
     // TC1: Happy path
     tcs.push({
       flowType: "MF",
-      name: `Verificar el flujo principal de "${ctx.summary}"`,
+      name: `Flujo principal exitoso - ${name}`,
       objective: `Validar que el usuario puede completar exitosamente el flujo principal: ${ctx.summary}`,
       precondition: this._buildPrecondition(ctx),
       steps: this._buildMainFlowSteps(ctx),
@@ -74,7 +88,7 @@ export class TCGenerator {
     for (const ac of positiveAC) {
       tcs.push({
         flowType: "MF",
-        name: `Verificar: ${ac.title}`,
+        name: `Criterio de aceptación cumplido - ${ac.title}`,
         objective: `Validar el criterio de aceptación: ${ac.title}`,
         precondition: this._buildPrecondition(ctx),
         steps: this._buildACSteps(ac, ctx, "MF"),
@@ -99,11 +113,12 @@ export class TCGenerator {
 
   _generateAlternativeFlows(ctx) {
     const tcs = [];
+    const name = this._deriveName(ctx);
 
     // Cancel flow
     tcs.push({
       flowType: "AF",
-      name: `Verificar cancelación del flujo en "${ctx.summary}"`,
+      name: `Cancelación del flujo - ${name}`,
       objective: `Validar que el usuario puede cancelar la operación y el sistema regresa al estado anterior sin guardar cambios`,
       precondition: this._buildPrecondition(ctx),
       steps: [
@@ -119,7 +134,7 @@ export class TCGenerator {
     // Minimum data flow
     tcs.push({
       flowType: "AF",
-      name: `Verificar flujo con datos mínimos obligatorios en "${ctx.summary}"`,
+      name: `Flujo con datos mínimos obligatorios - ${name}`,
       objective: `Validar que la funcionalidad opera correctamente completando únicamente los campos obligatorios`,
       precondition: this._buildPrecondition(ctx),
       steps: [
@@ -137,7 +152,7 @@ export class TCGenerator {
     for (const ac of conditionalAC) {
       tcs.push({
         flowType: "AF",
-        name: `Verificar flujo alternativo: ${ac.title}`,
+        name: `Flujo alternativo - ${ac.title}`,
         objective: `Validar el comportamiento alternativo definido en el criterio: ${ac.title}`,
         precondition: this._buildPrecondition(ctx),
         steps: this._buildACSteps(ac, ctx, "AF"),
@@ -148,7 +163,7 @@ export class TCGenerator {
     if (this._detectsMultipleRoles(ctx)) {
       tcs.push({
         flowType: "AF",
-        name: `Verificar acceso según rol de usuario en "${ctx.summary}"`,
+        name: `Acceso diferenciado por rol - ${name}`,
         objective: `Validar que cada rol de usuario tiene el acceso y permisos correctos sobre la funcionalidad`,
         precondition: "El sistema tiene configurados usuarios con distintos roles activos",
         steps: [
@@ -169,11 +184,12 @@ export class TCGenerator {
 
   _generateExceptionFlows(ctx) {
     const tcs = [];
+    const name = this._deriveName(ctx);
 
     // Required field validation
     tcs.push({
       flowType: "EX",
-      name: `Verificar validación de campos obligatorios en "${ctx.summary}"`,
+      name: `Campos obligatorios vacíos o ausentes - operación denegada en ${name}`,
       objective: `Validar que el sistema impide continuar y muestra mensajes de error cuando los campos obligatorios están vacíos`,
       precondition: this._buildPrecondition(ctx),
       steps: [
@@ -189,7 +205,7 @@ export class TCGenerator {
     // Invalid data format
     tcs.push({
       flowType: "EX",
-      name: `Verificar comportamiento con datos con formato inválido en "${ctx.summary}"`,
+      name: `Datos con formato inválido - sistema rechaza la operación en ${name}`,
       objective: `Validar que el sistema rechaza datos con formato incorrecto y muestra mensajes de error apropiados sin procesar la solicitud`,
       precondition: this._buildPrecondition(ctx),
       steps: [
@@ -205,7 +221,7 @@ export class TCGenerator {
     // Server/service error
     tcs.push({
       flowType: "EX",
-      name: `Verificar manejo de error de servidor/servicio en "${ctx.summary}"`,
+      name: `Error de servidor o servicio durante ${name} - mensaje amigable sin exposición técnica`,
       objective: `Validar que el sistema gestiona correctamente errores del servidor y muestra mensajes amigables sin exponer información técnica`,
       precondition: `${this._buildPrecondition(ctx)} El entorno de test está configurado para simular errores de servidor (error 500 o timeout).`,
       steps: [
@@ -221,7 +237,7 @@ export class TCGenerator {
     // Duplicate / business rule violation
     tcs.push({
       flowType: "EX",
-      name: `Verificar manejo de duplicados y reglas de negocio en "${ctx.summary}"`,
+      name: `Duplicados o incumplimiento de reglas de negocio en ${name} - operación denegada`,
       objective: `Validar que el sistema detecta y previene la creación de registros duplicados y el incumplimiento de reglas de negocio`,
       precondition: `${this._buildPrecondition(ctx)} Existe al menos un registro previo en el sistema con datos conocidos.`,
       steps: [
@@ -237,7 +253,7 @@ export class TCGenerator {
     // Permissions / insufficient access
     tcs.push({
       flowType: "EX",
-      name: `Verificar control de acceso con permisos insuficientes en "${ctx.summary}"`,
+      name: `Acceso denegado por permisos insuficientes en ${name}`,
       objective: `Validar que el sistema impide el acceso a la funcionalidad a usuarios sin los permisos necesarios`,
       precondition: "Existe un usuario sin permisos para acceder a la funcionalidad bajo prueba",
       steps: [
@@ -255,7 +271,7 @@ export class TCGenerator {
     for (const ac of negativeAC) {
       tcs.push({
         flowType: "EX",
-        name: `Verificar excepción: ${ac.title}`,
+        name: `Excepción - ${ac.title}`,
         objective: `Validar el comportamiento de excepción definido en el criterio: ${ac.title}`,
         precondition: this._buildPrecondition(ctx),
         steps: this._buildACSteps(ac, ctx, "EX"),
@@ -310,12 +326,13 @@ export class TCGenerator {
       },
     ];
 
-    // Add specific AC verification steps
+    // Add specific AC verification steps (title capped at 80 chars to avoid dumping full Confluence text)
     for (const ac of ctx.acItems.slice(0, 2)) {
+      const shortTitle = ac.title.length > 80 ? ac.title.substring(0, 77) + "..." : ac.title;
       steps.push({
-        description: `Y el usuario verifica el criterio: ${ac.title}`,
+        description: `Y el usuario verifica el criterio: ${shortTitle}`,
         test_data: ac.testData || "",
-        expected_result: ac.expected || ac.title,
+        expected_result: `El criterio "${shortTitle}" se cumple y el resultado es verificable en pantalla`,
       });
     }
 

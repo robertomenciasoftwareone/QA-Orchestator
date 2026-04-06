@@ -8,7 +8,7 @@ Servidor MCP local de QA que integra **Jira**, **Confluence**, **Figma**, **Zeph
 
 Con un solo prompt en Copilot como:
 ```
-Quiero que según la info que tienes de la STORY "ESXTRA-187" de JIRA (con enlace a Confluence) me crees en Zephyr Scale todos los TC posibles organizados por flujos MF/AF/EX con script Step by Step en la carpeta "Sprint_24" con labels TC_GENERATED_BY_IA y POR_REVISAR
+Quiero que según la info que tienes de la STORY "ESCPIC-187" de JIRA (con enlace a Confluence) me crees en Zephyr Scale todos los TC posibles organizados por flujos MF/AF/EX con script Step by Step en la carpeta "Sprint_24" con labels TC_GENERATED_BY_IA y POR_REVISAR
 ```
 
 El servidor:
@@ -59,7 +59,7 @@ Añade esto a tu `settings.json` o al fichero `.vscode/mcp.json`:
         "CONFLUENCE_API_TOKEN": "tu_token",
         "FIGMA_TOKEN": "tu_figma_token",
         "ZEPHYR_API_TOKEN": "tu_zephyr_token",
-        "JIRA_PROJECT_KEY": "ESXTRA"
+        "JIRA_PROJECT_KEY": "ESCPIC"
       }
     }
   }
@@ -128,19 +128,19 @@ Añade esto a tu `settings.json` o al fichero `.vscode/mcp.json`:
 
 ```
 # Generar y crear TCs completos
-Quiero que según la info de la STORY "ESXTRA-187" en JIRA (que tiene enlace a Confluence) me crees en Zephyr Scale todos los TC posibles organizados por flujos MF/AF/EX con script Step by Step en la carpeta "Sprint_24". Asignar labels TC_GENERATED_BY_IA y POR_REVISAR.
+Quiero que según la info de la STORY "ESCPIC-187" en JIRA (que tiene enlace a Confluence) me crees en Zephyr Scale todos los TC posibles organizados por flujos MF/AF/EX con script Step by Step en la carpeta "Sprint_24". Asignar labels TC_GENERATED_BY_IA y POR_REVISAR.
 
 # Solo preview antes de crear
-Genera un preview de todos los TCs de la story ESXTRA-187 sin crearlos en Zephyr
+Genera un preview de todos los TCs de la story ESCPIC-187 sin crearlos en Zephyr
 
 # Incluir Playwright
-Genera los TCs de ESXTRA-187 en Zephyr Scale en la carpeta "Regresion" e incluye también los scripts de Playwright para cada TC
+Genera los TCs de ESCPIC-187 en Zephyr Scale en la carpeta "Regresion" e incluye también los scripts de Playwright para cada TC
 
 # Exportar para importación manual
-Exporta los TCs de ESXTRA-187 en formato JSON para importar en Zephyr Scale
+Exporta los TCs de ESCPIC-187 en formato JSON para importar en Zephyr Scale
 
 # Ejecutar test desde Gherkin (estilo Hercules)
-Genera un feature BDD de ESXTRA-187 y ejecútalo con Playwright contra https://app.miempresa.com
+Genera un feature BDD de ESCPIC-187 y ejecútalo con Playwright contra https://app.miempresa.com
 
 # Auditoría accesibilidad
 Ejecuta una auditoría de accesibilidad WCAG AA sobre https://app.miempresa.com/dashboard

@@ -5,13 +5,13 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { JiraClient } from "./clients/jira.js";
 import { ConfluenceClient } from "./clients/confluence.js";
 import { FigmaClient } from "./clients/figma.js";
+import { JiraClient } from "./clients/jira.js";
 import { ZephyrClient } from "./clients/zephyr.js";
 import { PlaywrightRunner } from "./playwright/runner.js";
-import { TCGenerator } from "./qa/tc-generator.js";
 import { GherkinGenerator } from "./qa/gherkin-generator.js";
+import { TCGenerator } from "./qa/tc-generator.js";
 
 // ─── Config (tokens added via .env or mcp settings) ───────────────────────────
 const CONFIG = {
@@ -27,6 +27,7 @@ const CONFIG = {
   },
   figma: {
     token: process.env.FIGMA_TOKEN || "",
+    fileKey: process.env.FIGMA_FILE_KEY || "",
   },
   zephyr: {
     baseUrl: process.env.JIRA_BASE_URL || "", // Zephyr lives inside Jira
@@ -61,7 +62,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: {
         type: "object",
         properties: {
-          issue_key: { type: "string", description: "Jira issue key, e.g. ESXTRA-187" },
+          issue_key: { type: "string", description: "Jira issue key, e.g. ESCPIC-187" },
         },
         required: ["issue_key"],
       },
@@ -168,7 +169,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: {
         type: "object",
         properties: {
-          issue_key: { type: "string", description: "Jira story key, e.g. ESXTRA-187" },
+          issue_key: { type: "string", description: "Jira story key, e.g. ESCPIC-187" },
           folder: { type: "string", description: "Zephyr Scale folder where TCs will be created" },
           extra_labels: {
             type: "array",
@@ -355,13 +356,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // ── FIGMA ──
       case "figma_get_file": {
-        const key = args.file_key || extractFigmaKey(args.url);
+        const key = args.file_key || extractFigmaKey(args.url) || CONFIG.figma.fileKey;
         const file = await figma.getFile(key);
         return { content: [{ type: "text", text: JSON.stringify(file, null, 2) }] };
       }
 
       case "figma_get_components": {
-        const components = await figma.getComponents(args.file_key);
+        const key = args.file_key || CONFIG.figma.fileKey;
+        const components = await figma.getComponents(key);
         return { content: [{ type: "text", text: JSON.stringify(components, null, 2) }] };
       }
 

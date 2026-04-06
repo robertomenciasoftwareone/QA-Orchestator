@@ -68,6 +68,10 @@ export class JiraClient {
 }
 
 function extractConfluencePageId(url) {
-  const match = url.match(/\/pages\/(\d+)/);
-  return match ? match[1] : null;
+  // /pages/123456/... path format
+  const pathMatch = url.match(/\/pages\/(\d+)/);
+  if (pathMatch) return pathMatch[1];
+  // viewpage.action?pageId=123456 query param format
+  const queryMatch = url.match(/[?&]pageId=(\d+)/);
+  return queryMatch ? queryMatch[1] : null;
 }
