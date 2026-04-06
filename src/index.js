@@ -517,11 +517,21 @@ async function handleCreateTCsFromStory(args) {
   log.push(`\n📁 PASO 3 — Carpeta Zephyr: "${args.folder}"`);
   let folderId = null;
   try {
+    // 3.1 Listar carpetas existentes
+    const existingFolders = await zephyr.listFolders(projectKey);
+    const allFolders = existingFolders.values || [];
+    log.push(`   📂 Carpetas existentes (${allFolders.length}): ${allFolders.map(f => `"${f.name}"(${f.id})`).join(", ") || "ninguna"}`);
+
+    // 3.2 Buscar o crear
     const folderResult = await zephyr.getOrCreateFolder(projectKey, args.folder);
     folderId = folderResult.id;
-    log.push(`   ✅ Carpeta lista (id: ${folderId})`);
+    log.push(`   ✅ Carpeta lista — nombre: "${folderResult.name}", id: ${folderId}`);
   } catch (err) {
-    log.push(`   ⚠️  No se pudo crear/encontrar carpeta: ${err.message}. Los TCs se crearán sin carpeta.`);
+    log.push(`   ❌ ERROR creando carpeta: ${err.message}`);
+    if (err.response) {
+      log.push(`   HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}`);
+    }
+    log.push(`   ⚠️  Los TCs se crearán SIN carpeta — revisar permisos Zephyr.`);
   }
 
   // ── PASO 4: Creación de TCs + pasos ───────────────────────────────────────
@@ -544,11 +554,16 @@ async function handleCreateTCsFromStory(args) {
       });
       const key = result.key;
 
-      // 4b. Insertar pasos en llamada separada
-      await zephyr.insertSteps(key, tc.steps);
+      // 4b. Insertar pasos en llamada separada (obligatorio)
+      try {
+        await zephyr.insertSteps(key, tc.steps);
+        log.push(`   ✅ ${key} — ${tcName} (${tc.steps.length} pasos insertados)`);
+      } catch (stepsErr) {
+        const detail = stepsErr.response ? `HTTP ${stepsErr.response.status}: ${JSON.stringify(stepsErr.response.data)}` : stepsErr.message;
+        log.push(`   ⚠️  ${key} creado PERO fallo al insertar pasos: ${detail}`);
+      }
 
       created.push({ key, name: tcName, flowType: tc.flowType, steps: tc.steps.length });
-      log.push(`   ✅ ${key} — ${tcName} (${tc.steps.length} pasos)`);
     } catch (err) {
       failed.push({ name: tcName, flowType: tc.flowType, error: err.message });
       log.push(`   ❌ FAILED — ${tcName}: ${err.message}`);
